@@ -54,14 +54,14 @@ beforeEach(() => {
   calls = [];
 });
 
-function request(endpoint, question = QUESTION, malformed = false) {
+function request(endpoint, question = QUESTION, malformed = false, history) {
   return new Request(`https://nigeriaai.example.invalid/api/${endpoint}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-forwarded-for": `192.0.2.${++requestCount}`,
     },
-    body: malformed ? "{" : JSON.stringify({ question }),
+    body: malformed ? "{" : JSON.stringify({ question, history }),
   });
 }
 
@@ -168,6 +168,29 @@ for (const [endpoint, handler] of [["chat", chat], ["ask", ask]]) {
 test("chat rejects a non-string question", async () => {
   const response = await chat(request("chat", {}));
   assert.equal(response.status, 400);
+  assert.equal(calls.length, 0);
+});
+
+test("chat answers a follow-up using the last identified user topic", async () => {
+  const history = [
+    { role: "user", content: "How do I register for NYSC?" },
+    { role: "user", content: QUESTION },
+    { role: "assistant", content: "I can also help you get a NIN." },
+    { role: "user", content: "Can I renew it?" },
+  ];
+  const result = await readJson(await chat(request("chat", "How much is it?", false, history)));
+  assert.equal(result.answer, ANSWER_MAP.get("passport-fee").answer);
+  assert.deepEqual(summary(result), {
+    mode: "curated", confident: true, sourceIds: ["nis-passports", "nis-knowledge", "nis-contact"],
+  });
+  assert.equal(calls.length, 0);
+});
+
+test("ask abstains when a renewal question names an unsupported service", async () => {
+  const result = await readJson(await ask(request("ask", "How do I renew my streaming subscription?")));
+  assert.deepEqual(summary(result), {
+    mode: "curated", confident: false, sourceIds: ["egov-home", "egov-services", "nigeria-gov"],
+  });
   assert.equal(calls.length, 0);
 });
 

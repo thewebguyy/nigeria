@@ -1,4 +1,4 @@
-import { ANSWERS, type CuratedAnswer } from "./answers";
+import { ANSWERS, SERVICE_IDENTIFIERS, type CuratedAnswer } from "./answers";
 import { getSources, SOURCES } from "./sources";
 import { findPlace, isCentreQuestion, nimcCentresLink } from "./places";
 import type { AskResult } from "./types";
@@ -13,94 +13,112 @@ const STOP_WORDS = new Set([
   "some", "just", "now", "then", "than", "also", "help", "know", "like",
 ]);
 
-/** Words too broad to decide a match on their own. */
+/** Generic words have less weight when ranking answers within a qualified service. */
 const WEAK_WORDS = new Set([
   "register", "registration", "apply", "application", "get", "new", "card", "number",
   "service", "services", "online", "official", "site", "website", "office", "need",
-  "document", "documents", "requirement", "requirements", "start", "business",
+  "document", "requirement", "start", "business",
 ]);
 
-const ALIASES: Record<string, string[]> = {
-  "driver's licence": ["driver", "licence"],
-  "drivers licence": ["driver", "licence"],
-  "drivers license": ["driver", "licence"],
-  "driver license": ["driver", "licence"],
-  "national id": ["nin", "identity"],
-  "id card": ["nin", "identity"],
-  "international passport": ["passport"],
-  "student loan": ["nelfund", "loan"],
-  "school fees": ["nelfund", "loan"],
-  "youth service": ["nysc"],
-  "tax number": ["tin", "tax"],
-  "tax id": ["tin", "tax"],
-  "bank verification": ["bvn"],
-  "retirement": ["pension"],
-};
+const WORD_VARIANTS = new Map([
+  ["application", "apply"], ["applying", "apply"],
+  ["charges", "fee"], ["fees", "fee"], ["price", "fee"],
+  ["costs", "cost"], ["documents", "document"], ["requirements", "requirement"],
+  ["drivers", "driver"], ["driving", "driver"], ["licenses", "licence"],
+  ["license", "licence"], ["licences", "licence"], ["passports", "passport"],
+  ["enroll", "enrol"], ["enrollment", "enrolment"],
+  ["payment", "pay"], ["registering", "register"], ["registration", "register"],
+  ["renewal", "renew"], ["renewing", "renew"],
+]);
 
-export function tokenize(input: string) {
-  const lower = input.toLowerCase().replace(/[^a-z0-9\s'-]/g, " ");
-  const words = lower
-    .split(/\s+/)
-    .filter((word) => word.length > 1 && !STOP_WORDS.has(word));
-
-  const expanded: string[] = [];
-  for (const [phrase, tokens] of Object.entries(ALIASES)) {
-    if (lower.includes(phrase)) expanded.push(...tokens);
-  }
-
-  return Array.from(new Set([...words, ...expanded]));
+function normalise(text: string) {
+  return text.toLowerCase().replace(/['’]s\b/g, "").replace(/[^a-z0-9]+/g, " ").trim()
+    .split(" ").map((word) => WORD_VARIANTS.get(word) ?? word).join(" ");
 }
 
-function scoreAnswer(entry: CuratedAnswer, tokens: string[]) {
-  const haystack = [entry.title, entry.service, ...entry.keywords].join(" ").toLowerCase();
-  let score = 0;
+function containsPhrase(text: string, phrase: string) {
+  return ` ${text} `.includes(` ${phrase} `);
+}
 
-  for (const token of tokens) {
-    if (!token) continue;
-    if (entry.keywords.includes(token)) score += WEAK_WORDS.has(token) ? 1 : 6;
-    else if (
-      entry.keywords.some((keyword) => keyword.includes(token) || token.includes(keyword))
-    ) {
-      score += WEAK_WORDS.has(token) ? 0.5 : 3;
-    } else if (!WEAK_WORDS.has(token) && haystack.includes(token)) {
-      score += 1.5;
-    }
+type CuratedService = CuratedAnswer["service"];
+type ConversationContext = string | readonly string[];
+
+function subjectWords(text: string) {
+  return text.replace(/\b(?:a|an|the|my|our|your)\b/g, "").replace(/ +/g, " ").trim();
+}
+
+const identifiers = [...new Set(ANSWERS.map(({ service }) => service))].map((service) => ({
+  service,
+  phrases: SERVICE_IDENTIFIERS[service].map((phrase) => subjectWords(normalise(phrase))),
+}));
+
+function matchingServices(question: string) {
+  const subject = subjectWords(question);
+  return identifiers.filter(({ phrases }) => phrases.some((phrase) => containsPhrase(subject, phrase)))
+    .map(({ service }) => service);
+}
+
+// A subject-free follow-up can inherit a service. An unrecognised subject starts a new topic.
+const FOLLOW_UP = [
+  /^(?:and )?how much(?: (?:is (?:it|that|this|the fee)|(?:does|will) (?:it|that|this) cost))?$/,
+  /^(?:and )?how long(?: (?:does|will) (?:it|that|this) take)?$/,
+  /^(?:and )?what (?:is the (?:fee|cost)|about the (?:fee|cost|document|requirement)|(?:document|requirement) do i need)$/,
+  /^(?:and )?(?:(?:where|how) )?(?:do|can|should) i (?:apply|pay|renew|enrol|get it done|do (?:it|that|this)|(?:apply for|renew|pay for) (?:it|that|this))$/,
+];
+
+function isFollowUp(question: string) {
+  return FOLLOW_UP.some((pattern) => pattern.test(question));
+}
+
+function resolveService(question: string, context: ConversationContext) {
+  const direct = matchingServices(question);
+  if (direct.length === 1) return { service: direct[0], previous: "" };
+  if (direct.length > 1 || !isFollowUp(question)) return null;
+
+  const turns = typeof context === "string" ? [context] : [...context].reverse();
+  for (const turn of turns) {
+    const previous = normalise(turn);
+    const services = matchingServices(previous);
+    if (services.length === 1) return { service: services[0], previous };
+    if (services.length > 1 || !isFollowUp(previous)) return null;
   }
+  return null;
+}
 
+function rankingTerms(question: string) {
+  const terms = new Set(question.split(" ").filter((word) => word && !STOP_WORDS.has(word)));
+  if (containsPhrase(question, "how much")) terms.add("fee");
+  return terms;
+}
+
+function scoreAnswer(entry: CuratedAnswer, question: string, terms: ReadonlySet<string>) {
+  const phrases = [...new Set(entry.keywords.map(normalise))];
+  const words = new Set(phrases.flatMap((phrase) => phrase.split(" ")));
+  let score = 0;
+  for (const term of terms) {
+    if (words.has(term)) score += WEAK_WORDS.has(term) ? 1 : 3;
+  }
+  for (const phrase of phrases) {
+    const length = phrase.split(" ").length;
+    if (length > 1 && containsPhrase(question, phrase)) score += 2 + 2 * length;
+  }
   return score;
 }
 
-function normalise(text: string) {
-  return ` ${text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()} `;
-}
-
-/**
- * A keyword phrase that appears word for word in the question is a stronger
- * signal than a single shared word, and longer phrases count for more.
- */
-function phraseBonus(entry: CuratedAnswer, question: string) {
+export function retrieve(question: string, limit = 3, context: ConversationContext = "") {
   const asked = normalise(question);
-  let bonus = 0;
-  for (const keyword of entry.keywords) {
-    if (keyword.length < 4) continue;
-    const phrase = normalise(keyword);
-    if (asked.includes(phrase)) {
-      bonus += 2 + 2 * phrase.trim().split(" ").length;
-    }
-  }
-  return bonus;
-}
+  const intent = resolveService(asked, context);
+  if (!intent) return [];
 
-export function retrieve(question: string, limit = 3) {
-  const tokens = tokenize(question);
-  if (!tokens.length) return [];
-
-  return ANSWERS.map((entry) => ({
-    entry,
-    score: scoreAnswer(entry, tokens) + phraseBonus(entry, question),
-  }))
-    .filter(({ score }) => score > 0)
-    .sort((a, b) => b.score - a.score)
+  const terms = rankingTerms(asked);
+  const previousTerms = rankingTerms(intent.previous);
+  return ANSWERS.filter(({ service }) => service === intent.service)
+    .map((entry) => ({
+      entry,
+      score: scoreAnswer(entry, asked, terms),
+      previousScore: scoreAnswer(entry, intent.previous, previousTerms),
+    }))
+    .sort((a, b) => b.score - a.score || b.previousScore - a.previousScore)
     .slice(0, limit);
 }
 
@@ -116,14 +134,13 @@ export function isSmallTalk(question: string) {
   return SMALL_TALK.test(question.trim());
 }
 
-const NIN_TOPIC = /\b(nin|nimc|enrol\w*|identity|national id|id card)\b/i;
-
 /** Centre questions about NIN, answered with NIMC's own finder for the user's state. */
-export function centreAnswer(question: string, context = ""): AskResult | null {
-  const topic = `${context} ${question}`;
-  if (!isCentreQuestion(question) || !NIN_TOPIC.test(topic)) return null;
+export function centreAnswer(question: string, context: ConversationContext = ""): AskResult | null {
+  if (!isCentreQuestion(question)) return null;
+  const intent = resolveService(normalise(question), context);
+  if (intent?.service !== "nin") return null;
 
-  const place = findPlace(topic);
+  const place = findPlace(question) ?? findPlace(intent.previous);
   const link = nimcCentresLink(place);
   const where = place
     ? place.town
@@ -146,20 +163,7 @@ export function centreAnswer(question: string, context = ""): AskResult | null {
   };
 }
 
-function bestMatch(text: string) {
-  const best = retrieve(text)[0];
-  const strong = best
-    ? tokenize(text).some(
-        (token) =>
-          !WEAK_WORDS.has(token) &&
-          token.length >= 3 &&
-          best.entry.keywords.some((keyword) => keyword.includes(token)),
-      )
-    : false;
-  return best && best.score >= 3 && strong ? best : null;
-}
-
-export function curatedAnswer(question: string, context = ""): AskResult {
+export function curatedAnswer(question: string, context: ConversationContext = ""): AskResult {
   if (isSmallTalk(question)) {
     const thanks = /^(thanks?|thank you)/i.test(question.trim());
     return {
@@ -177,8 +181,7 @@ export function curatedAnswer(question: string, context = ""): AskResult {
   const centre = centreAnswer(question, context);
   if (centre) return centre;
 
-  // Follow-ups like "how much is it?" lean on earlier messages for the topic.
-  const best = bestMatch(question) ?? (context ? bestMatch(`${context} ${question}`) : null);
+  const best = retrieve(question, 1, context)[0];
 
   if (!best) {
     return {
@@ -206,8 +209,8 @@ export function curatedAnswer(question: string, context = ""): AskResult {
   };
 }
 
-export function buildContext(question: string) {
-  return retrieve(question, 4)
+export function buildContext(question: string, context: ConversationContext = "") {
+  return retrieve(question, 4, context)
     .map(({ entry }) => {
       const refs = getSources(entry.sourceIds)
         .map((source) => `${source.id} (${source.agency}, ${source.url})`)

@@ -170,8 +170,7 @@ export async function POST(request: Request) {
   const recent = history
     .filter((turn) => turn.role === "user")
     .slice(-3)
-    .map((turn) => turn.content)
-    .join(" ");
+    .map((turn) => turn.content);
 
   // Greetings and thanks get a short, instant reply without a model call.
   if (!key || isSmallTalk(question)) {
@@ -181,12 +180,12 @@ export async function POST(request: Request) {
 
   const centre = centreAnswer(question, recent);
   // Search the crawled government pages; only the best matches go to the model.
-  const hits = searchPages(recent ? `${question} ${recent}` : question, 6);
+  const hits = searchPages([question, ...recent].join(" "), 6);
   const notes = [
     centre
       ? `### Enrolment centres\nNIMC publishes the official enrolment-centre finder: ${centre.action?.url}. You do not have individual centre names or addresses, so never invent any. Tell the person the finder is linked below, filtered for their area if known, and to call ahead.`
       : "",
-    buildContext(recent ? `${recent} ${question}` : question),
+    buildContext(question, recent),
     hits.length
       ? `### Government web pages (cite these by id, e.g. ${hits[0].id})\n${hits
           .map((hit) => `- ${hit.id} | ${hit.host} | ${hit.title} | ${hit.url}\n  ${hit.excerpt}`)
@@ -292,7 +291,7 @@ export async function POST(request: Request) {
           (id): id is string => typeof id === "string" && known.has(id),
         );
 
-        const fallback = retrieve(question, 1)[0]?.entry;
+        const fallback = retrieve(question, 1, recent)[0]?.entry;
         const confident = parsed.confident === true;
         // Cite only what the model actually relied on; small talk cites nothing.
         const chosen = ids;

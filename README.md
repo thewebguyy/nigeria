@@ -20,7 +20,7 @@ npm exec -- tsc --noEmit --incremental false
 
 ## Offline fixtures
 
-- [Curated questions](tests/fixtures/questions.mjs) label six positive questions, a contextual follow-up, and five questions that should trigger abstention. The suite checks ranked and selected answer IDs, citation IDs, and catalogue integrity.
+- [Curated questions](tests/fixtures/questions.mjs) label 15 positive questions, 14 standalone abstention cases, seven conversation cases, and two NIMC centre lookups. The suite checks ranked and selected answer IDs, citation IDs, and catalogue integrity.
 - [SQLite fixtures](tests/search.test.mjs) create two synthetic documents in a temporary database with the crawler's FTS5 tokenizer and insert trigger. Search runs in a child process so SQLite closes its read-only handle before fixture cleanup. Additional cases use missing, malformed, and unopenable indexes.
 - [API fixtures](tests/routes.test.mjs) call the actual handlers with Web `Request` objects and stub every provider fetch. They cover input validation, curated fallback, citation filtering, split UTF-8 chunks, and stream completion. The handlers load from an isolated working directory so any local index stays outside the test.
 
@@ -28,13 +28,12 @@ The suite uses synthetic text and reserved example domains. It requires no API k
 
 ## Baseline results
 
-On the 12 labelled questions, retrieval ranked the expected answer first on **6 of 6** positives. The contextual follow-up selected the expected answer. **3 of 5** negative questions received confident answers. These figures describe the committed fixture set.
+On the expanded 38-case fixture set, retrieval ranked the expected answer first on **15 of 15** standalone positives, and **0 of 14** standalone negatives received a confident answer. All seven conversation cases and both NIMC centre lookups matched their expected outcomes. Evaluating the same cases on the Phase 1 commit yielded **12 of 15** positives and **11 of 14** confidently answered standalone negatives.
 
-The baseline has **24 ordinary passing checks** and **14 expected failures**. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
+The suite has **55 ordinary passing checks** and **11 expected failures**. The three Phase 1 curated false matches are now ordinary regression tests. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
 
 | Expected failures | Recorded behaviour |
 | --- | --- |
-| `CURATED-01` to `CURATED-03` | Library-card and TV-subscription renewals select passport renewal. Gym-membership payment selects passport fees. |
 | `INDEX-01`, `INDEX-02` | A loan page matches a passport query through the word “renewal”. An unopenable database throws instead of returning no hits. |
 | `ASK-01` | `/api/ask` accepts a question object and returns HTTP 200. |
 | `ASK-02`, `ASK-03`, `CHAT-01` to `CHAT-04` | Missing and unknown-only citation IDs leave chat confident with no sources, and ask substitutes curated links. Chat also accepts duplicate IDs and an unrelated catalogue ID. |
