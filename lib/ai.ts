@@ -98,11 +98,8 @@ export async function answerQuestion(question: string): Promise<AskResult> {
   try {
     const result = await askCencori(question);
     if (result) return result;
-  } catch (error) {
-    console.error(
-      "AI request failed, falling back to curated answers:",
-      error instanceof Error ? error.message : error,
-    );
+  } catch {
+    console.error("Ask provider request failed; using curated answer");
   }
 
   return curatedAnswer(question);
