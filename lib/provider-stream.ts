@@ -19,8 +19,13 @@ function readChunk(data: string) {
     throw new ProviderStreamError("invalid-event");
   }
   if (chunk.choices.length === 0) return { content: "", stopped: false }; // Usage-only chunk.
-  const choice = chunk.choices[0] as { delta?: { content?: unknown } | null; finish_reason?: unknown } | null;
+  const choice = chunk.choices[0] as {
+    index?: unknown;
+    delta?: { content?: unknown } | null;
+    finish_reason?: unknown;
+  } | null;
   if (!choice || typeof choice !== "object" || Array.isArray(choice) ||
+      (choice.index !== undefined && choice.index !== 0) ||
       (choice.delta != null && (typeof choice.delta !== "object" || Array.isArray(choice.delta)))) {
     throw new ProviderStreamError("invalid-event");
   }
@@ -74,8 +79,8 @@ export async function readProviderStream(
         }
         skipLF = char === "\r";
         if (line === "") {
-          if (data.length > 0) {
-            if (event === "error") throw new ProviderStreamError("provider-error");
+          if (data.length > 0 && event === "error") throw new ProviderStreamError("provider-error");
+          if (data.length > 0 && (event === "" || event === "message")) {
             const payload = data.join("\n");
             if (payload === "[DONE]") return;
             const chunk = readChunk(payload);

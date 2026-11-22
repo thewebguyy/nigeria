@@ -410,7 +410,8 @@ test("chat parses multiline data, CR/LF boundaries and multiple frames", async (
     'data: {"choices": [\r\n' +
     `data: ${JSON.stringify({ delta: { content: model.slice(0, split) } })}]}\r\n\r\n`;
   const last = modelDelta(model.slice(split)).replaceAll("\n", "\r");
-  const wire = frame + last + "data: [DONE]\r\rdata: [DONE]\r\rdata: broken\r\r";
+  const wire = "event: diagnostics\ndata: [DONE]\n\n" + frame + last +
+    "data: [DONE]\r\rdata: [DONE]\r\rdata: broken\r\r";
   useGateway(() => new Response(new ReadableStream({
     start(controller) {
       const boundary = wire.indexOf("\r\n") + 1;
@@ -426,6 +427,7 @@ test("chat parses multiline data, CR/LF boundaries and multiple frames", async (
 
 for (const [label, suffix] of [
   ["an undispatched completion marker", "data: [DONE]\n"],
+  ["a completion sentinel on an unrelated event type", "event: diagnostics\ndata: [DONE]\n\n"],
   ["malformed provider event JSON", "data: {broken}\n\ndata: [DONE]\n\n"],
   ["a provider error event", 'event: error\ndata: {"error":{"message":"private fixture"}}\n\ndata: [DONE]\n\n'],
   ["a truncated finish reason", 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n'],
@@ -446,6 +448,19 @@ for (const [label, suffix] of [
     assert.doesNotMatch(JSON.stringify(log.mock.calls.map(({ arguments: args }) => args)), /private fixture/);
   });
 }
+
+test("chat cannot assemble a completed answer from different provider choice indices", async (context) => {
+  const log = context.mock.method(console, "error", () => {});
+  const answer = modelPayload(PASSPORT_SOURCES);
+  const midpoint = Math.floor(answer.length / 2);
+  const frames = [answer.slice(0, midpoint), answer.slice(midpoint)].map((content, index) =>
+    `data: ${JSON.stringify({ choices: [{ index, delta: { content } }] })}\n\n`);
+  useGateway(() => new Response(frames.join("") + "data: [DONE]\n\n"));
+  const events = await readEvents(await chat(request("chat")));
+  assert.deepEqual(events.filter(({ event }) => event !== "delta").map(({ event }) => event), ["fallback"]);
+  assertCuratedPassport(events.at(-1).data);
+  assert.deepEqual(log.mock.calls[0].arguments, ["Chat provider stream failed", "invalid-event"]);
+});
 
 test("chat bounds queued previews for a slow downstream without losing the terminal reply", { timeout: 2000 }, async () => {
   let finish;
