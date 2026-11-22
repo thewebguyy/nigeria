@@ -18,6 +18,12 @@ npm exec -- tsc --noEmit --incremental false
 
 `npm run dev` starts the local app. With `CENCORI_API_KEY` unset, the API handlers return curated answers. The quality suite uses synthetic model responses in both API paths.
 
+## API requests and stream completion
+
+Both answer endpoints require a UTF-8 JSON body with a non-empty string `question`. They trim the question and accept up to 600 UTF-16 code units. The route counts actual body bytes and rejects requests over 64 KiB with HTTP 413. Invalid JSON or question values return HTTP 400. Clients can use `application/json`, `application/*+json`, the historical Fetch string-body media type `text/plain`, or an omitted media type. Other explicit media types return HTTP 415. Chat still retains at most eight valid history turns and truncates each turn to 1,200 code units.
+
+The chat relay reads UTF-8 SSE events up to a 256 KiB provider wire budget. It joins multiline data fields, accepts content for the requested choice, and requires a blank-line-delimited `[DONE]` in a message event before validating the model answer. Early EOF, malformed events, provider errors, and timeouts yield one terminal fallback while the client remains connected. Client cancellation aborts the provider request and releases the reader. Slow clients can skip provisional previews and still receive the final result.
+
 ## Offline fixtures
 
 - [Curated questions](tests/fixtures/questions.mjs) label 24 positive questions, 23 standalone abstention cases, ten conversation cases, and three NIMC centre lookups. The suite checks ranked and selected answer IDs, citation IDs, and catalogue integrity.
@@ -30,13 +36,11 @@ The suite uses synthetic text and reserved example domains. It requires no API k
 
 On the current 60-case fixture set, retrieval ranks the expected answer first on **24 of 24** standalone positives, and **0 of 23** standalone negatives receive a confident answer. All ten conversation cases and three NIMC centre lookups match their expected outcomes. The earlier 38-case comparison measured **12 of 15** positives and **11 of 14** confidently answered standalone negatives on the Phase 1 commit.
 
-The suite has **101 ordinary passing checks** and **4 expected failures**. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
+On Windows, the suite has **123 ordinary passing checks** and **2 expected failures**. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
 
 | Expected failures | Recorded behaviour |
 | --- | --- |
 | `INDEX-01`, `INDEX-02` | A loan page matches a passport query through the word “renewal”. An unopenable database throws instead of returning no hits. |
-| `ASK-01` | `/api/ask` accepts a question object and returns HTTP 200. |
-| `CHAT-06` | Provider EOF before the completion marker can yield a successful terminal event. |
 
 The handler tests exercise server framing and emitted data. Browser rendering, downstream browser disconnects, live provider compatibility, production corpus relevance, and factual accuracy of agency guidance require separate validation.
 

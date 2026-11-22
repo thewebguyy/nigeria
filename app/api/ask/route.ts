@@ -1,4 +1,5 @@
 import { answerQuestion } from "@/lib/ai";
+import { readAnswerRequest } from "@/lib/answer-request";
 
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 20;
@@ -30,36 +31,16 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "Send a question in the request body." }, { status: 400 });
-  }
-
-  const question =
-    typeof body === "object" && body !== null && "question" in body
-      ? String((body as { question: unknown }).question ?? "").trim()
-      : "";
-
-  if (!question) {
-    return Response.json({ error: "Type a question first." }, { status: 400 });
-  }
-
-  if (question.length > 600) {
-    return Response.json(
-      { error: "That question is too long. Keep it under 600 characters." },
-      { status: 400 },
-    );
-  }
+  const input = await readAnswerRequest(request);
+  if (input instanceof Response) return input;
 
   try {
-    const result = await answerQuestion(question);
+    const result = await answerQuestion(input.question);
     return Response.json(result, {
       headers: { "Cache-Control": "no-store" },
     });
-  } catch (error) {
-    console.error("Ask route failed:", error instanceof Error ? error.message : error);
+  } catch {
+    console.error("Ask route failed");
     return Response.json(
       { error: "Something went wrong while looking that up. Please try again." },
       { status: 500 },

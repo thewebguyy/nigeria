@@ -1,11 +1,14 @@
 import { buildContext, centreAnswer, curatedAnswer, isSmallTalk, retrieve, unverifiedAnswer } from "@/lib/ask";
+import { readAnswerRequest } from "@/lib/answer-request";
 import { formatEvidence, groundAnswer, GROUNDING_INSTRUCTIONS, previewText, type Evidence, type ModelAnswer } from "@/lib/grounding";
+import { ProviderStreamError, readProviderStream } from "@/lib/provider-stream";
 import { pageRef, searchPages } from "@/lib/search";
 import type { AskResult } from "@/lib/types";
 
 const ENDPOINT = "https://api.cencori.com/v1/chat/completions";
 const DEFAULT_MODEL = "maximo-atlas-1.5";
 const MAX_TURNS = 8;
+const MAX_QUEUED_PREVIEWS = 2;
 
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 20;
@@ -36,20 +39,18 @@ ${GROUNDING_INSTRUCTIONS}`;
 
 type Turn = { role: "user" | "assistant"; content: string };
 
-function parsePayload(content: string) {
+function parsePayload(content: string): ModelAnswer {
   const cleaned = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  let parsed: ModelAnswer | null;
   try {
-    return JSON.parse(cleaned);
+    parsed = JSON.parse(cleaned) as ModelAnswer | null;
   } catch {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start === -1 || end === -1) return null;
-    try {
-      return JSON.parse(cleaned.slice(start, end + 1));
-    } catch {
-      return null;
-    }
+    throw new ProviderStreamError("invalid-model-json");
   }
+  if (!parsed || typeof parsed.answer !== "string" || !parsed.answer.trim()) {
+    throw new ProviderStreamError("invalid-model-json");
+  }
+  return parsed;
 }
 
 /** Pulls the answer out of a partially streamed JSON object. */
@@ -89,28 +90,12 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "Send the conversation as JSON." }, { status: 400 });
-  }
+  const input = await readAnswerRequest(request);
+  if (input instanceof Response) return input;
+  const question = input.question;
 
-  const payload = (body ?? {}) as { question?: unknown; history?: unknown };
-  const question = typeof payload.question === "string" ? payload.question.trim() : "";
-
-  if (!question) {
-    return Response.json({ error: "Type a question first." }, { status: 400 });
-  }
-  if (question.length > 600) {
-    return Response.json(
-      { error: "That question is too long. Keep it under 600 characters." },
-      { status: 400 },
-    );
-  }
-
-  const history: Turn[] = Array.isArray(payload.history)
-    ? payload.history
+  const history: Turn[] = Array.isArray(input.history)
+    ? input.history
         .filter(
           (turn): turn is Turn =>
             typeof turn === "object" &&
@@ -150,124 +135,103 @@ export async function POST(request: Request) {
   })));
   const notes = formatEvidence(evidence);
   const encoder = new TextEncoder();
+  const downstream = new AbortController();
+  const timeout = AbortSignal.timeout(45000);
+  const signal = AbortSignal.any([request.signal, downstream.signal, timeout]);
+  const disconnected = () => request.signal.aborted || downstream.signal.aborted;
 
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let closed = false;
-      // The reader may leave mid-reply; writing after that would throw.
-      const send = (event: string, data: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(sse(event, data)));
-        } catch {
-          closed = true;
+  async function relay(controller: ReadableStreamDefaultController<Uint8Array>) {
+    const send = (event: string, data: unknown) => {
+      if (!disconnected()) controller.enqueue(encoder.encode(sse(event, data)));
+    };
+
+    try {
+      signal.throwIfAborted();
+      const upstream = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model: process.env.CENCORI_MODEL || DEFAULT_MODEL,
+          temperature: 0.2,
+          max_tokens: 600,
+          stream: true,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            ...history,
+            {
+              role: "user",
+              content: `EVIDENCE:\n${notes || "No request-specific evidence."}\n\nQUESTION: ${question}`,
+            },
+          ],
+        }),
+        signal,
+      });
+
+      if (!upstream.ok) {
+        void upstream.body?.cancel().catch(() => console.error("Chat provider error body cleanup failed"));
+        throw new ProviderStreamError("http-error");
+      }
+      if (!upstream.body) throw new ProviderStreamError("empty-stream");
+
+      let raw = "";
+      let sentText = "";
+      await readProviderStream(upstream.body, signal, (content) => {
+        raw += content;
+        // Each preview is a snapshot. A slow client can skip snapshots and still receive the final answer.
+        if ((controller.desiredSize ?? 0) <= 0) return;
+        const partial = readAnswerField(raw);
+        if (partial && partial.length > sentText.length) {
+          sentText = partial;
+          send("delta", { text: previewText(partial) });
         }
+      });
+      signal.throwIfAborted();
+
+      const grounded = groundAnswer(parsePayload(raw), evidence);
+      if (!grounded) {
+        send("fallback", unverifiedAnswer());
+        return;
+      }
+      const fallback = retrieve(question, 1, recent)[0]?.entry;
+
+      const final: AskResult = {
+        ...grounded,
+        followUps: fallback?.followUps ?? [
+          "How do I get a NIN?",
+          "How do I register a business?",
+          "How do I apply for a student loan?",
+        ],
+        action: centre?.action ?? null,
       };
 
-      try {
-        const upstream = await fetch(ENDPOINT, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${key}`,
-          },
-          body: JSON.stringify({
-            model: process.env.CENCORI_MODEL || DEFAULT_MODEL,
-            temperature: 0.2,
-            max_tokens: 600,
-            stream: true,
-            response_format: { type: "json_object" },
-            messages: [
-              { role: "system", content: SYSTEM_PROMPT },
-              ...history,
-              {
-                role: "user",
-                content: `EVIDENCE:\n${notes || "No request-specific evidence."}\n\nQUESTION: ${question}`,
-              },
-            ],
-          }),
-          signal: AbortSignal.timeout(45000),
-        });
-
-        if (!upstream.ok || !upstream.body) {
-          throw new Error(`Cencori returned ${upstream.status}`);
-        }
-
-        const reader = upstream.body.getReader();
-        const decoder = new TextDecoder();
-        let raw = "";
-        let sseBuffer = "";
-        let sentText = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          sseBuffer += decoder.decode(value, { stream: true });
-
-          const lines = sseBuffer.split("\n");
-          sseBuffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const data = trimmed.slice(5).trim();
-            if (!data || data === "[DONE]") continue;
-
-            try {
-              const chunk = JSON.parse(data);
-              const delta = chunk?.choices?.[0]?.delta?.content;
-              if (typeof delta === "string") raw += delta;
-            } catch {
-              // A malformed chunk is skipped; the final payload is validated below.
-            }
-          }
-
-          const partial = readAnswerField(raw);
-          if (partial && partial.length > sentText.length) {
-            sentText = partial;
-            send("delta", { text: previewText(partial) });
-          }
-        }
-
-        const parsed = parsePayload(raw) as ModelAnswer | null;
-
-        if (!parsed || typeof parsed.answer !== "string" || !parsed.answer.trim()) {
-          throw new Error("The model did not return a usable answer.");
-        }
-
-        const grounded = groundAnswer(parsed, evidence);
-        if (!grounded) {
-          send("fallback", unverifiedAnswer());
-          return;
-        }
-        const fallback = retrieve(question, 1, recent)[0]?.entry;
-
-        const final: AskResult = {
-          ...grounded,
-          followUps: fallback?.followUps ?? [
-            "How do I get a NIN?",
-            "How do I register a business?",
-            "How do I apply for a student loan?",
-          ],
-          action: centre?.action ?? null,
-        };
-
-        send("done", final);
-      } catch (error) {
-        console.error(
-          "Chat stream failed, sending curated answer:",
-          error instanceof Error ? error.message : error,
-        );
+      send("done", final);
+    } catch (error) {
+      if (!disconnected()) {
+        const reason = timeout.aborted ? "timeout" :
+          error instanceof ProviderStreamError ? error.message : "transport-error";
+        console.error("Chat provider stream failed", reason);
         send("fallback", curatedAnswer(question, recent));
-      } finally {
-        if (!closed) {
-          try {
-            controller.close();
-          } catch {}
-        }
       }
+    } finally {
+      if (!downstream.signal.aborted) controller.close();
+    }
+  }
+
+  let settled: Promise<void>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      settled = relay(controller);
+      return settled;
     },
-  });
+    cancel() {
+      downstream.abort();
+      return settled;
+    },
+  }, { highWaterMark: MAX_QUEUED_PREVIEWS });
 
   return new Response(stream, {
     headers: {
