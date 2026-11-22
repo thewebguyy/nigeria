@@ -1,4 +1,4 @@
-import { buildContext, curatedAnswer, retrieve, unverifiedAnswer } from "./ask";
+import { buildContext, curatedAnswer, isSmallTalk, retrieve, unverifiedAnswer } from "./ask";
 import { formatEvidence, groundAnswer, GROUNDING_INSTRUCTIONS, type ModelAnswer } from "./grounding";
 import type { AskResult } from "./types";
 
@@ -91,7 +91,7 @@ async function askCencori(question: string): Promise<AskResult | null> {
 }
 
 export async function answerQuestion(question: string): Promise<AskResult> {
-  if (!process.env.CENCORI_API_KEY) {
+  if (!process.env.CENCORI_API_KEY || isSmallTalk(question)) {
     return curatedAnswer(question);
   }
 

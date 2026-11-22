@@ -30,7 +30,7 @@ The suite uses synthetic text and reserved example domains. It requires no API k
 
 On the current 60-case fixture set, retrieval ranks the expected answer first on **24 of 24** standalone positives, and **0 of 23** standalone negatives receive a confident answer. All ten conversation cases and three NIMC centre lookups match their expected outcomes. The earlier 38-case comparison measured **12 of 15** positives and **11 of 14** confidently answered standalone negatives on the Phase 1 commit.
 
-The suite has **99 ordinary passing checks** and **4 expected failures**. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
+The suite has **101 ordinary passing checks** and **4 expected failures**. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
 
 | Expected failures | Recorded behaviour |
 | --- | --- |

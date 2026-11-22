@@ -151,6 +151,14 @@ for (const [endpoint, handler] of [["chat", chat], ["ask", ask]]) {
     assert.equal(calls.length, 0);
   });
 
+  test(`${endpoint} handles greetings locally even with a model key`, async () => {
+    useGateway(() => Response.json({ choices: [{ message: { content: modelPayload([], "Hello.") } }] }));
+    const result = await readJson(await handler(request(endpoint, "Hello")));
+    assert.match(result.answer, /^Hello\./);
+    assert.deepEqual(summary(result), { mode: "curated", confident: true, sourceIds: [] });
+    assert.equal(calls.length, 0);
+  });
+
   test(`${endpoint} falls back on provider HTTP 503`, async (context) => {
     context.mock.method(console, "error", () => {});
     useGateway(() => new Response(null, { status: 503 }));
