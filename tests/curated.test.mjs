@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { ANSWERS, ANSWER_MAP } from "../lib/answers.ts";
 import { buildContext, curatedAnswer, retrieve } from "../lib/ask.ts";
+import { formatEvidence } from "../lib/grounding.ts";
 import { SOURCES } from "../lib/sources.ts";
 import { centreCases, contextualCases, negatives, positives } from "./fixtures/questions.mjs";
 
@@ -28,7 +29,7 @@ function assertAbstains(question, context = "") {
   assert.equal(result.confident, false, result.answer);
   assert.deepEqual(result.sources.map(({ id }) => id), PORTAL_SOURCES);
   assert.deepEqual(retrieve(question, 1, context), []);
-  assert.equal(buildContext(question, context), "");
+  assert.deepEqual(buildContext(question, context), []);
 }
 
 for (const { question } of negatives) {
@@ -43,7 +44,7 @@ for (const { question, context, answerId, sourceIds } of contextualCases) {
     }
     assertCuratedAnswer(question, context, answerId, sourceIds);
     assert.equal(retrieve(question, 1, context)[0]?.entry.id, answerId);
-    assert.ok(buildContext(question, context).startsWith(`### ${ANSWER_MAP.get(answerId).title}\n`));
+    assert.ok(formatEvidence(buildContext(question, context)).startsWith(`### ${ANSWER_MAP.get(answerId).title}\n`));
   });
 }
 

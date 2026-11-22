@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, mock, test } from "node:test";
 import { ANSWER_MAP } from "../lib/answers.ts";
+import { SOURCE_MAP } from "../lib/sources.ts";
 import { knownDefect } from "./support/known-defect.mjs";
 
 const QUESTION = "How do I renew my passport?";
 const PASSPORT_SOURCES = ["nis-passports", "nis-knowledge"];
-const MODEL_ANSWER = "Renew at the passport office listed for your area.";
+const MODEL_ANSWER = ANSWER_MAP.get("passport-renew").answer;
+const PORTAL_SOURCES = ["egov-home", "egov-services", "nigeria-gov"];
 const GATEWAY = "https://api.cencori.com/v1/chat/completions";
 const FIXTURE_KEY = "synthetic-test-value";
 let requestCount = 0;
@@ -70,7 +72,7 @@ function useGateway(response) {
   upstream = response;
 }
 
-function assertGatewayRequest(stream) {
+function assertGatewayRequest(stream, question = QUESTION) {
   assert.equal(calls.length, 1);
   const { url, options } = calls[0];
   assert.equal(url, GATEWAY);
@@ -78,11 +80,12 @@ function assertGatewayRequest(stream) {
   assert.equal(options.headers.Authorization, `Bearer ${FIXTURE_KEY}`);
   const body = JSON.parse(options.body);
   assert.equal(Boolean(body.stream), stream);
-  assert.match(body.messages.at(-1).content, /QUESTION: How do I renew my passport\?$/);
+  assert.ok(body.messages.at(-1).content.endsWith(`QUESTION: ${question}`));
+  return body.messages;
 }
 
-function modelPayload(sourceIds, answer = MODEL_ANSWER) {
-  return JSON.stringify({ answer, sourceIds, confident: true, agencyUrl: null });
+function modelPayload(sourceIds, answer = MODEL_ANSWER, options) {
+  return JSON.stringify({ answer, sourceIds, confident: true, agencyUrl: null, ...options });
 }
 
 function modelDelta(content) {
@@ -202,10 +205,10 @@ knownDefect("ASK-01", "ask rejects a non-string question", 400, 200, async () =>
 });
 
 test("chat sends a delta and a cited done event through split UTF-8 frames", async () => {
-  const answer = "Example: renew at the listed office in a café district.";
-  const content = modelPayload(["nis-passports", "unknown-fixture-id"], answer);
+  const answer = MODEL_ANSWER.replace(" ", "\u00a0");
+  const content = modelPayload([...PASSPORT_SOURCES, "unknown-fixture-id"], answer);
   const bytes = Buffer.from(modelDelta(content) + "data: [DONE]\n\n");
-  const split = bytes.indexOf(Buffer.from("é")) + 1;
+  const split = bytes.indexOf(Buffer.from("\u00a0")) + 1;
   assert.ok(split > 1, "fixture must split inside a UTF-8 character");
   useGateway(() => new Response(new ReadableStream({
     start(controller) {
@@ -219,19 +222,19 @@ test("chat sends a delta and a cited done event through split UTF-8 frames", asy
   assert.deepEqual(events[0].data, { text: answer });
   assert.equal(events[1].data.answer, answer);
   assert.deepEqual(summary(events[1].data), {
-    mode: "ai", confident: true, sourceIds: ["nis-passports"],
+    mode: "ai", confident: true, sourceIds: PASSPORT_SOURCES,
   });
   assertGatewayRequest(true);
 });
 
 test("ask returns a cited AI answer and filters an unknown source ID", async () => {
   useGateway(() => Response.json({
-    choices: [{ message: { content: modelPayload(["nis-passports", "unknown-fixture-id"]) } }],
+    choices: [{ message: { content: modelPayload([...PASSPORT_SOURCES, "unknown-fixture-id"]) } }],
   }));
   const result = await readJson(await ask(request("ask")));
   assert.equal(result.answer, MODEL_ANSWER);
   assert.deepEqual(summary(result), {
-    mode: "ai", confident: true, sourceIds: ["nis-passports"],
+    mode: "ai", confident: true, sourceIds: PASSPORT_SOURCES,
   });
   assertGatewayRequest(false);
 });
@@ -253,58 +256,96 @@ test("ask returns curated JSON for incomplete model JSON", async () => {
   assertGatewayRequest(false);
 });
 
-async function chatResult(sourceIds, answer) {
-  useGateway(() => chatStream(modelPayload(sourceIds, answer)));
-  const events = await readEvents(await chat(request("chat")));
-  assert.deepEqual(events.map(({ event }) => event), ["delta", "done"]);
-  assertGatewayRequest(true);
-  return events;
-}
-
-for (const [chatId, askId, label, sourceIds] of [
-  ["CHAT-01", "ASK-02", "missing", undefined],
-  ["CHAT-02", "ASK-03", "unknown-only", ["unknown-fixture-id"]],
+for (const [label, sourceIds, answer, options] of [
+  ["missing citations", undefined],
+  ["unknown citations only", ["unknown-fixture-id"]],
+  ["an unrelated catalogue ID", ["jamb-portal"]],
+  ["an incomplete source set", ["nis-passports"]],
+  ["a valid citation set with an invented fee", PASSPORT_SOURCES, "Renewal costs exactly ₦123."],
+  ["a valid citation set with altered instructions", PASSPORT_SOURCES,
+    MODEL_ANSWER.replace("not at the office", "at the office")],
+  ["a model-declared low-confidence answer", PASSPORT_SOURCES, MODEL_ANSWER, { confident: false }],
 ]) {
-  knownDefect(chatId, `chat abstains on ${label} model citations`, false, true, async () => {
-    const [, { data }] = await chatResult(sourceIds);
-    assert.equal(data.mode, "ai");
-    assert.deepEqual(data.sources, []);
-    return data.confident;
-  });
-
-  knownDefect(askId, `ask does not substitute citations for ${label} model citations`,
-    { mode: "ai", confident: false, sourceIds: [] },
-    { mode: "ai", confident: true, sourceIds: PASSPORT_SOURCES }, async () => {
-      useGateway(() => Response.json({
-        choices: [{ message: { content: modelPayload(sourceIds) } }],
-      }));
-      const result = await readJson(await ask(request("ask")));
-      assertGatewayRequest(false);
-      return summary(result);
+  for (const endpoint of ["chat", "ask"]) {
+    test(`${endpoint} withholds model text with ${label}`, async () => {
+      const content = modelPayload(sourceIds, answer, options);
+      const { result, events } = await runModel(endpoint, content);
+      if (endpoint === "chat") assert.deepEqual(events.map(({ event }) => event), ["delta", "fallback"]);
+      assert.deepEqual(summary(result), {
+        mode: "curated", confident: false, sourceIds: PORTAL_SOURCES,
+      });
+      assert.notEqual(result.answer, answer ?? MODEL_ANSWER);
     });
+  }
 }
 
-for (const [id, label, sourceIds, expectedIds] of [
-  ["CHAT-03", "duplicate", ["nis-passports", "nis-passports"], ["nis-passports"]],
-  ["CHAT-04", "unrelated", ["jamb-portal"], []],
-]) {
-  knownDefect(id, `chat normalises ${label} model citations`, expectedIds, sourceIds, async () => {
-    const [, { data }] = await chatResult(sourceIds);
-    assert.equal(data.mode, "ai");
-    return summary(data).sourceIds;
+async function runModel(endpoint, content, question = QUESTION) {
+  if (endpoint === "chat") {
+    useGateway(() => chatStream(content));
+    const events = await readEvents(await chat(request(endpoint, question)));
+    const messages = assertGatewayRequest(true, question);
+    return { result: events.at(-1).data, events, messages };
+  }
+  useGateway(() => Response.json({ choices: [{ message: { content } }] }));
+  const result = await readJson(await ask(request(endpoint, question)));
+  return { result, messages: assertGatewayRequest(false, question) };
+}
+
+test("chat deduplicates the cited evidence and excludes unrelated catalogue entries from the prompt", async () => {
+  const { result, events, messages } = await runModel("chat",
+    modelPayload([...PASSPORT_SOURCES, "nis-passports", "jamb-portal"], MODEL_ANSWER,
+      { agencyUrl: SOURCE_MAP.get("jamb-portal").url }));
+  assert.deepEqual(events.map(({ event }) => event), ["delta", "done"]);
+  assert.deepEqual(summary(result), {
+    mode: "ai", confident: true, sourceIds: PASSPORT_SOURCES,
   });
-}
+  assert.equal(result.agency.url, SOURCE_MAP.get("nis-passports").url);
+  assert.ok(messages.at(-1).content.includes(MODEL_ANSWER));
+  assert.ok(messages.every(({ content }) => !content.includes("jamb-portal")));
+});
 
-knownDefect("CHAT-05", "chat keeps an unverified link out of provisional output", false, true, async () => {
-  const url = "https://unlisted.example.invalid/reference";
-  const [preview, final] = await chatResult(["nis-passports"], `Use [this reference](${url}).`);
-  assert.equal(final.data.answer, "Use this reference.");
-  return preview.data.text.includes(url);
+test("ask cannot reuse citations from an earlier request", async () => {
+  const content = modelPayload(PASSPORT_SOURCES);
+  const { result } = await runModel("ask", content, "How do I apply for a visa?");
+  assert.deepEqual(summary(result), {
+    mode: "curated", confident: false, sourceIds: PORTAL_SOURCES,
+  });
+});
+
+test("chat emits plain preview text and permits only cited links in the final answer", async () => {
+  const approved = SOURCE_MAP.get("nis-passports").url;
+  const unapproved = SOURCE_MAP.get("jamb-portal").url;
+  const answer = MODEL_ANSWER.replace("NIS passport portal", `[NIS passport portal](${approved})`)
+    .replace("NIS portal and select", `[NIS portal](${unapproved}) and select`);
+  const { events, result } = await runModel("chat", modelPayload(PASSPORT_SOURCES, answer));
+  assert.deepEqual(events.map(({ event }) => event), ["delta", "done"]);
+  assert.equal(events[0].data.text, MODEL_ANSWER);
+  assert.ok(result.answer.includes(`[NIS passport portal](${approved})`));
+  assert.ok(!result.answer.includes(unapproved));
+});
+
+test("chat strips a link destination even if it arrives before the closing parenthesis", async () => {
+  const unapproved = "https://unlisted.example.invalid/reference";
+  const answer = MODEL_ANSWER.replace("NIS passport portal", `[NIS passport portal](${unapproved})`);
+  const payload = modelPayload(PASSPORT_SOURCES, answer);
+  const split = payload.indexOf(unapproved) + unapproved.length;
+  useGateway(() => new Response(new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode(modelDelta(payload.slice(0, split))));
+      controller.enqueue(encoder.encode(modelDelta(payload.slice(split)) + "data: [DONE]\n\n"));
+      controller.close();
+    },
+  })));
+  const events = await readEvents(await chat(request("chat")));
+  assert.deepEqual(events.map(({ event }) => event), ["delta", "delta", "done"]);
+  assert.ok(events.every(({ data }) => !(data.text ?? data.answer).includes(unapproved)));
+  assert.equal(events.at(-1).data.answer, MODEL_ANSWER);
 });
 
 knownDefect("CHAT-06", "chat rejects provider EOF before the completion marker",
   ["delta", "fallback"], ["delta", "done"], async () => {
-    useGateway(() => chatStream(modelPayload(["nis-passports"]), false));
+    useGateway(() => chatStream(modelPayload(PASSPORT_SOURCES), false));
     const events = await readEvents(await chat(request("chat")));
     assertGatewayRequest(true);
     return events.map(({ event }) => event);

@@ -1,4 +1,5 @@
 import { ANSWERS, SERVICE_IDENTIFIERS, type CuratedAnswer } from "./answers";
+import type { Evidence } from "./grounding";
 import { getSources, SOURCES } from "./sources";
 import { findPlace, isCentreQuestion, nimcCentresLink } from "./places";
 import type { AskResult } from "./types";
@@ -234,21 +235,7 @@ export function curatedAnswer(question: string, context: ConversationContext = "
 
   const best = retrieve(question, 1, context)[0];
 
-  if (!best) {
-    return {
-      answer:
-        "I don't have a reliable answer for that one, and I would rather say so than guess. The federal services portal at services.gov.ng lists agencies by service, and each agency's own site is the one to trust for fees, forms and documents. If you tell me the service you are after, I can point you to the right agency.",
-      sources: getSources(["egov-home", "egov-services", "nigeria-gov"]),
-      mode: "curated",
-      confident: false,
-      agency: UNKNOWN_AGENCY,
-      followUps: [
-        "How do I get a NIN?",
-        "How do I register a business?",
-        "How do I apply for a student loan?",
-      ],
-    };
-  }
+  if (!best) return unverifiedAnswer();
 
   return {
     answer: best.entry.answer,
@@ -260,22 +247,28 @@ export function curatedAnswer(question: string, context: ConversationContext = "
   };
 }
 
-export function buildContext(question: string, context: ConversationContext = "") {
-  return retrieve(question, 4, context)
-    .map(({ entry }) => {
-      const refs = getSources(entry.sourceIds)
-        .map((source) => `${source.id} (${source.agency}, ${source.url})`)
-        .join("; ");
-      return `### ${entry.title}\n${entry.answer}\nSources: ${refs}`;
-    })
-    .join("\n\n");
+export function unverifiedAnswer(): AskResult {
+  return {
+    answer:
+      "I don't have a reliable answer for that one, and I would rather say so than guess. The federal services portal at services.gov.ng lists agencies by service, and each agency's own site is the one to trust for fees, forms and documents. If you tell me the service you are after, I can point you to the right agency.",
+    sources: getSources(["egov-home", "egov-services", "nigeria-gov"]),
+    mode: "curated",
+    confident: false,
+    agency: UNKNOWN_AGENCY,
+    followUps: [
+      "How do I get a NIN?",
+      "How do I register a business?",
+      "How do I apply for a student loan?",
+    ],
+  };
 }
 
-export function sourceCatalogue() {
-  return SOURCES.map(
-    (source) =>
-      `${source.id} | ${source.agency} | ${source.title} | ${source.url} | ${source.topics.join(", ")}`,
-  ).join("\n");
+export function buildContext(question: string, context: ConversationContext = ""): Evidence[] {
+  return retrieve(question, 1, context).map(({ entry }) => ({
+    title: entry.title,
+    text: entry.answer,
+    sources: getSources(entry.sourceIds),
+  }));
 }
 
 export function isKnownSource(id: string) {
