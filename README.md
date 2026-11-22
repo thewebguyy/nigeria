@@ -30,13 +30,14 @@ The suite uses synthetic text and reserved example domains. It requires no API k
 
 On the current 60-case fixture set, retrieval ranks the expected answer first on **24 of 24** standalone positives, and **0 of 23** standalone negatives receive a confident answer. All ten conversation cases and three NIMC centre lookups match their expected outcomes. The earlier 38-case comparison measured **12 of 15** positives and **11 of 14** confidently answered standalone negatives on the Phase 1 commit.
 
-The suite has **77 ordinary passing checks** and **11 expected failures**. The three Phase 1 curated false matches are now ordinary regression tests. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
+The suite has **101 ordinary passing checks** and **4 expected failures**. Node includes matched expected failures in its pass count and labels each case `EXPECTED FAILURE`. Each case has a stable ID and only matches the comparison assertion raised by the harness for its documented baseline result. A different result or error fails the run. Once the desired assertion passes, the runner reports an unexpected pass. Convert that case to a normal regression test in the fix PR.
 
 | Expected failures | Recorded behaviour |
 | --- | --- |
 | `INDEX-01`, `INDEX-02` | A loan page matches a passport query through the word “renewal”. An unopenable database throws instead of returning no hits. |
 | `ASK-01` | `/api/ask` accepts a question object and returns HTTP 200. |
-| `ASK-02`, `ASK-03`, `CHAT-01` to `CHAT-04` | Missing and unknown-only citation IDs leave chat confident with no sources, and ask substitutes curated links. Chat also accepts duplicate IDs and an unrelated catalogue ID. |
-| `CHAT-05`, `CHAT-06` | An unlisted link appears in a chat delta. Provider EOF before the completion marker can yield a successful terminal event. |
+| `CHAT-06` | Provider EOF before the completion marker can yield a successful terminal event. |
 
 The handler tests exercise server framing and emitted data. Browser rendering, downstream browser disconnects, live provider compatibility, production corpus relevance, and factual accuracy of agency guidance require separate validation.
+
+Both AI handlers validate citation IDs against the evidence they actually send for the current request. A confident model response must reproduce one complete evidence block and cite its complete source set. Failed validation yields a low-confidence portal response. Chat previews are plain text until a final event, and inline links in a grounded reply must use exact HTTPS URLs from its citations. This deliberately rejects paraphrases and clipped excerpts. Evidence checks establish text provenance. Corpus correctness and relevance still depend on retrieval and source quality.

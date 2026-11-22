@@ -336,8 +336,10 @@ export function Chat() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let receivedFinal = false;
 
         const handleEvent = (rawEvent: string) => {
+          if (receivedFinal) return;
           const lines = rawEvent.split("\n");
           const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
           const data = lines
@@ -353,23 +355,14 @@ export function Chat() {
             return;
           }
 
+          if (typeof parsed !== "object" || parsed === null) return;
           if (event === "delta") {
             const text = (parsed as { text?: string }).text;
             if (typeof text === "string") patch({ text });
-          } else if (event === "done") {
+          } else if (event === "done" || event === "fallback") {
             const result = parsed as AskResult;
-            patch({
-              text: result.answer,
-              streaming: false,
-              sources: result.sources,
-              confident: result.confident,
-              agency: result.agency,
-              action: result.action,
-              followUps: result.followUps,
-              mode: result.mode,
-            });
-          } else if (event === "fallback") {
-            const result = parsed as AskResult;
+            if (typeof result.answer !== "string" || (result.mode !== "ai" && result.mode !== "curated")) return;
+            receivedFinal = true;
             patch({
               text: result.answer,
               streaming: false,
@@ -392,9 +385,7 @@ export function Chat() {
           buffer = events.pop() ?? "";
           for (const event of events) handleEvent(event);
         }
-        if (buffer.trim()) handleEvent(buffer);
-
-        patch({ streaming: false });
+        if (!receivedFinal) throw new Error("The answer stream ended before the final response.");
       } catch (err) {
         if (controller.signal.aborted) {
           patch({ streaming: false, text: "Stopped." });
@@ -530,8 +521,15 @@ export function Chat() {
               ) : (
                 <article key={message.id} className="max-w-full">
                   <div>
-                    {message.text ? (
+                    {message.streaming && message.text && (
+                      <p className="mb-1 text-xs text-paper/60">Preview · checking evidence</p>
+                    )}
+                    {message.text && message.mode ? (
                       <AnswerText text={message.text} />
+                    ) : message.text ? (
+                      <p className="whitespace-pre-wrap text-[15.5px] leading-relaxed text-paper/85">
+                        {message.text}
+                      </p>
                     ) : (
                       <p className="thinking text-[15.5px]">Thinking…</p>
                     )}
@@ -564,7 +562,7 @@ export function Chat() {
                     </a>
                   )}
 
-                  {!message.streaming && message.text && (
+                  {message.mode && message.text && (
                     <MessageActions text={message.text} sources={message.sources} />
                   )}
                 </article>
