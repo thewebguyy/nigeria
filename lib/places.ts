@@ -48,8 +48,12 @@ export function nimcCentresLink(place: Place | null) {
   };
 }
 
-const CENTRE_WORDS = /\b(cent(er|re)s?|office|offices|location|locations|branch|branches|near me|nearest|where can i|where do i|where to)\b/i;
+const CENTRE_WORDS = /\b(cent(er|re)s?|offices?|locations?|branch(?:es)?)\b/i;
+const LOCATION_REQUEST = /\b(where|which|find|near me|nearest|closest)\b/i;
+const NIMC_LOCATION = /\b(?:nimc|nin|enrolment) (?:cent(?:er|re)s?|offices?|branch(?:es)?)\b/i;
+const ENROLMENT_LOCATION = /\bwhere (?:can i|do i|should i|to) (?:enrol|register|do it|get (?:it done|(?:a |my |the )?nin))\b/i;
 
 export function isCentreQuestion(text: string) {
-  return CENTRE_WORDS.test(text);
+  return NIMC_LOCATION.test(text) || ENROLMENT_LOCATION.test(text) ||
+    (CENTRE_WORDS.test(text) && LOCATION_REQUEST.test(text));
 }

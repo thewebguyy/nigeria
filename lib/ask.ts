@@ -32,7 +32,12 @@ const WORD_VARIANTS = new Map([
 ]);
 
 function normalise(text: string) {
-  return text.toLowerCase().replace(/['’]s\b/g, "").replace(/[^a-z0-9]+/g, " ").trim()
+  // The uppercase tax acronym is distinct from the ordinary word "tin".
+  return text.replace(/\bTIN\b/g, "tax identification number").toLowerCase()
+    .replace(/\b(what|where|how|it|that|there)['’]s\b/g, "$1 is")
+    .replace(/\bdon['’]t\b/g, "do not")
+    .replace(/['’]s\b/g, "").replace(/[^a-z0-9]+/g, " ").trim()
+    .replace(/^(?:abeg|please) /, "")
     .split(" ").map((word) => WORD_VARIANTS.get(word) ?? word).join(" ");
 }
 
@@ -40,7 +45,6 @@ function containsPhrase(text: string, phrase: string) {
   return ` ${text} `.includes(` ${phrase} `);
 }
 
-type CuratedService = CuratedAnswer["service"];
 type ConversationContext = string | readonly string[];
 
 function subjectWords(text: string) {
@@ -58,16 +62,59 @@ function matchingServices(question: string) {
     .map(({ service }) => service);
 }
 
+function isServiceName(text: string) {
+  const name = subjectWords(text);
+  return identifiers.some(({ phrases }) => phrases.includes(name));
+}
+
 // A subject-free follow-up can inherit a service. An unrecognised subject starts a new topic.
 const FOLLOW_UP = [
-  /^(?:and )?how much(?: (?:is (?:it|that|this|the fee)|(?:does|will) (?:it|that|this) cost))?$/,
+  /^(?:and )?how much(?: (?:is (?:it|that|this|the fee)|(?:does|will) (?:it|that|this) cost|e go cost))?$/,
   /^(?:and )?how long(?: (?:does|will) (?:it|that|this) take)?$/,
   /^(?:and )?what (?:is the (?:fee|cost)|about the (?:fee|cost|document|requirement)|(?:document|requirement) do i need)$/,
-  /^(?:and )?(?:(?:where|how) )?(?:do|can|should) i (?:apply|pay|renew|enrol|get it done|do (?:it|that|this)|(?:apply for|renew|pay for) (?:it|that|this))$/,
+  /^(?:and )?(?:(?:where|how) )?(?:do|can|should) i (?:apply|pay|renew|enrol|get it done|(?:do|get|apply for|renew|pay for) (?:it|that|this|one))$/,
+  /^(?:renew|apply for|register for) (?:it|that|this)$/,
+  /^wetin i go do$/,
 ];
 
 function isFollowUp(question: string) {
+  const location = / in (.+)$/.exec(question);
+  if (location) {
+    const place = findPlace(location[1]);
+    if (place && (normalise(place.town ?? "") === location[1] ||
+      normalise(place.state) === location[1].replace(/ state$/, ""))) {
+      question = question.slice(0, location.index);
+    }
+  }
   return FOLLOW_UP.some((pattern) => pattern.test(question));
+}
+
+const REJECTED_TOPIC = /^(?:(?:i|we) do not (?:want|need|mean)|(?:i am )?not (?:a|the|my|asking|looking))\b/;
+const EXPLICIT_REQUEST = /^(?:how|where|what|can|could|should|do|is|are|wetin|apply|renew|register|open|enrol|(?:i|we) (?:need|want))\b/;
+const PREREQUISITE_REQUEST = /^(?:(?:do|would) i need|(?:can|should) i use) .+? to (.+)$/;
+const CREDENTIAL_MODIFIER = /^(.*\b(?:apply for|renew|register for|open|get) .+) (?:with|using) (.+)$/;
+
+function requestSubject(clause: string) {
+  const target = PREREQUISITE_REQUEST.exec(clause)?.[1] ?? clause;
+  const without = target.replace(/ without (.+)$/, (suffix, name: string) => isServiceName(name) ? "" : suffix);
+  const credential = CREDENTIAL_MODIFIER.exec(without);
+  return credential && isServiceName(credential[2]) ? credential[1] : without;
+}
+
+/** Prefer the explicit request over supporting statements and named prerequisites. */
+function focusedQuestion(question: string) {
+  const clauses = question.replace(/\b(?:[a-z]\.){2,}[a-z]\b\.?/gi, (initials) => initials.replaceAll(".", ""))
+    .split(/(?<=[!?;])|\.(?=\s|$)|[\r\n]+|\bbut\b|\band\s+(?=(?:apply|renew|register|open|enrol)\b)/i)
+    .map(normalise).filter(Boolean);
+  const active = clauses.filter((clause) => !REJECTED_TOPIC.test(clause) &&
+    !(clause.startsWith("not ") && isServiceName(clause.slice(4))));
+  const requests = active.filter((clause) => EXPLICIT_REQUEST.test(clause) && !isFollowUp(clause));
+  const subjects = (requests.length ? requests : active).map(requestSubject);
+  // Keep a multi-part request together only when every explicit part has a supported subject.
+  if (requests.length > 1 && subjects.some((subject) => matchingServices(subject).length === 0)) return "";
+  const focus = subjects.join(" | ");
+  // A rejected topic followed only by a pronoun or elliptical request must not borrow an older topic.
+  return active.length !== clauses.length && isFollowUp(focus) ? "" : focus;
 }
 
 function resolveService(question: string, context: ConversationContext) {
@@ -77,7 +124,8 @@ function resolveService(question: string, context: ConversationContext) {
 
   const turns = typeof context === "string" ? [context] : [...context].reverse();
   for (const turn of turns) {
-    const previous = normalise(turn);
+    if (isSmallTalk(turn)) continue;
+    const previous = focusedQuestion(turn);
     const services = matchingServices(previous);
     if (services.length === 1) return { service: services[0], previous };
     if (services.length > 1 || !isFollowUp(previous)) return null;
@@ -106,19 +154,21 @@ function scoreAnswer(entry: CuratedAnswer, question: string, terms: ReadonlySet<
 }
 
 export function retrieve(question: string, limit = 3, context: ConversationContext = "") {
-  const asked = normalise(question);
+  const asked = focusedQuestion(question);
   const intent = resolveService(asked, context);
   if (!intent) return [];
 
   const terms = rankingTerms(asked);
   const previousTerms = rankingTerms(intent.previous);
+  const asksForFee = /^(?:and )?(?:how much|what (?:is|are) (?:the )?(?:fee|cost))\b/.test(asked);
   return ANSWERS.filter(({ service }) => service === intent.service)
     .map((entry) => ({
       entry,
+      feeMatch: Number(asksForFee && entry.aboutFees === true),
       score: scoreAnswer(entry, asked, terms),
       previousScore: scoreAnswer(entry, intent.previous, previousTerms),
     }))
-    .sort((a, b) => b.score - a.score || b.previousScore - a.previousScore)
+    .sort((a, b) => b.feeMatch - a.feeMatch || b.score - a.score || b.previousScore - a.previousScore)
     .slice(0, limit);
 }
 
@@ -136,11 +186,12 @@ export function isSmallTalk(question: string) {
 
 /** Centre questions about NIN, answered with NIMC's own finder for the user's state. */
 export function centreAnswer(question: string, context: ConversationContext = ""): AskResult | null {
-  if (!isCentreQuestion(question)) return null;
-  const intent = resolveService(normalise(question), context);
+  const asked = focusedQuestion(question);
+  if (!isCentreQuestion(asked)) return null;
+  const intent = resolveService(asked, context);
   if (intent?.service !== "nin") return null;
 
-  const place = findPlace(question) ?? findPlace(intent.previous);
+  const place = findPlace(asked) ?? findPlace(intent.previous);
   const link = nimcCentresLink(place);
   const where = place
     ? place.town

@@ -74,6 +74,51 @@ export const positives = [
     answerId: "nysc",
     sourceIds: ["nysc-portal", "nysc-home"],
   },
+  {
+    question: "Not a passport. I want to get my NIN.",
+    answerId: "nin",
+    sourceIds: ["nimc-nin", "nimc-enrol", "nimc-faq"],
+  },
+  {
+    question: "I don't have a passport. How do I apply for one?",
+    answerId: "passport-new",
+    sourceIds: ["nis-passports", "nis-knowledge", "nis-contact"],
+  },
+  {
+    question: "Do I need a NIN to renew my passport?",
+    answerId: "passport-renew",
+    sourceIds: ["nis-passports", "nis-knowledge"],
+  },
+  {
+    question: "Can I renew my passport without a NIN?",
+    answerId: "passport-renew",
+    sourceIds: ["nis-passports", "nis-knowledge"],
+  },
+  {
+    question: "Can I renew my passport with my NIN?",
+    answerId: "passport-renew",
+    sourceIds: ["nis-passports", "nis-knowledge"],
+  },
+  {
+    question: "How much does it cost to renew my passport?",
+    answerId: "passport-fee",
+    sourceIds: ["nis-passports", "nis-knowledge", "nis-contact"],
+  },
+  {
+    question: "How do I register for a T.I.N.?",
+    answerId: "tin",
+    sourceIds: ["firs-taxpromax", "firs-home"],
+  },
+  {
+    question: "Can I enroll for my N.I.N.?",
+    answerId: "nin",
+    sourceIds: ["nimc-nin", "nimc-enrol", "nimc-faq"],
+  },
+  {
+    question: "Where can I check my NIN slip online?",
+    answerId: "nin-slip",
+    sourceIds: ["nimc-slip", "nimc-faq", "nimc-services"],
+  },
 ];
 
 export const followUp = {
@@ -98,6 +143,15 @@ export const negatives = [
   { question: "How do I renew my passport and my driver's licence?", answerId: null },
   { question: "Can I pay for my student loan and passport together?", answerId: null },
   { question: "How much is it?", answerId: null },
+  { question: "I don't want a passport; how do I apply for a visa?", answerId: null },
+  { question: "Can I get an e-visa? My Nigerian passport is valid.", answerId: null },
+  { question: "Do I need my passport or NIN to apply for a visa?", answerId: null },
+  { question: "Can I open a bank account without BVN?", answerId: null },
+  { question: "How do I renew my passport? How do I apply for a visa?", answerId: null },
+  { question: "Can I apply for a visa with my passport?", answerId: null },
+  { question: "How do I renew my passport and apply for a visa?", answerId: null },
+  { question: "How do I recycle a tin can?", answerId: null },
+  { question: "What is spinning?", answerId: null },
 ];
 
 export const contextualCases = [
@@ -135,9 +189,27 @@ export const contextualCases = [
     answerId: "passport-new",
     sourceIds: ["nis-passports", "nis-knowledge", "nis-contact"],
   },
+  {
+    question: "Abeg, how much e go cost?",
+    context: "How do I renew my passport?",
+    answerId: "passport-fee",
+    sourceIds: ["nis-passports", "nis-knowledge", "nis-contact"],
+  },
+  {
+    question: "What's the fee?",
+    context: ["How do I renew my passport?", "Thanks!"],
+    answerId: "passport-fee",
+    sourceIds: ["nis-passports", "nis-knowledge", "nis-contact"],
+  },
+  {
+    question: "How much is it?",
+    context: ["How do I renew my passport?", "I don't need a passport."],
+    answerId: null,
+  },
 ];
 
 export const centreCases = [
   { question: "Where is the nearest NIMC centre in Ikeja?", context: "", answerId: "nimc-centres" },
   { question: "Where can I do it?", context: "How do I get a NIN in Ikeja?", answerId: "nimc-centres" },
+  { question: "Where can I enroll in Ikeja?", context: "How do I get a NIN?", answerId: "nimc-centres" },
 ];

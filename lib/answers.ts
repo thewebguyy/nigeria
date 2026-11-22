@@ -6,7 +6,8 @@ export const SERVICE_IDENTIFIERS = {
   cac: ["cac registration", "register with cac", "register company", "company registration",
     "incorporate", "incorporation", "limited company", "register business", "business registration",
     "business name", "trade name", "sole trader", "sole proprietorship", "register shop"],
-  tin: ["tin", "tax identification number", "tax id", "tax number", "tax registration", "register for tax"],
+  tin: ["tax identification number", "tax id", "tax number", "tax registration", "register for tax",
+    "get tin", "apply for tin", "register for tin", "verify tin"],
   jamb: ["jamb", "utme"],
   nysc: ["nysc", "youth service", "service year", "corps member", "call up letter"],
   nelfund: ["nelfund", "student loan", "education loan", "school fees loan"],
@@ -22,6 +23,7 @@ export type CuratedAnswer = {
   service: keyof typeof SERVICE_IDENTIFIERS;
   title: string;
   keywords: string[];
+  aboutFees?: true;
   answer: string;
   sourceIds: string[];
   agency: { name: string; url: string };
@@ -120,6 +122,7 @@ export const ANSWERS: CuratedAnswer[] = [
     id: "passport-fee",
     service: "passport",
     title: "What a passport costs",
+    aboutFees: true,
     keywords: [
       "passport fee",
       "passport renewal fee",
