@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { ANSWERS, ANSWER_MAP } from "../lib/answers.ts";
-import { curatedAnswer, retrieve } from "../lib/ask.ts";
+import { buildContext, curatedAnswer, retrieve } from "../lib/ask.ts";
 import { SOURCES } from "../lib/sources.ts";
-import { followUp, negatives, positives } from "./fixtures/questions.mjs";
-import { knownDefect } from "./support/known-defect.mjs";
+import { centreCases, contextualCases, negatives, positives } from "./fixtures/questions.mjs";
 
 for (const { question, answerId, sourceIds } of positives) {
   test(`curated answers ${question}`, () => {
@@ -13,11 +12,7 @@ for (const { question, answerId, sourceIds } of positives) {
   });
 }
 
-test("curated answer uses prior topic for a contextual follow-up", () => {
-  const { question, context, answerId, sourceIds } = followUp;
-  assert.equal(curatedAnswer(question).confident, false);
-  assertCuratedAnswer(question, context, answerId, sourceIds);
-});
+const PORTAL_SOURCES = ["egov-home", "egov-services", "nigeria-gov"];
 
 function assertCuratedAnswer(question, context, answerId, sourceIds) {
   const result = curatedAnswer(question, context);
@@ -27,35 +22,48 @@ function assertCuratedAnswer(question, context, answerId, sourceIds) {
   assert.deepEqual(result.sources.map(({ id }) => id), sourceIds);
 }
 
-function confidentAnswerId(question) {
-  const result = curatedAnswer(question);
+function assertAbstains(question, context = "") {
+  const result = curatedAnswer(question, context);
   assert.equal(result.mode, "curated");
-  assert.equal(typeof result.confident, "boolean");
-  if (!result.confident) return null;
-  const answer = ANSWERS.find((entry) => entry.answer === result.answer);
-  assert.ok(answer, "A confident answer must resolve to a curated entry");
-  return answer.id;
+  assert.equal(result.confident, false, result.answer);
+  assert.deepEqual(result.sources.map(({ id }) => id), PORTAL_SOURCES);
+  assert.deepEqual(retrieve(question, 1, context), []);
+  assert.equal(buildContext(question, context), "");
 }
 
-for (const { question, answerId, defectId, baseline } of negatives) {
-  const name = `curated abstains on ${question}`;
-  if (defectId) {
-    knownDefect(defectId, name, answerId, baseline, () => confidentAnswerId(question));
-  } else {
-    test(name, () => {
-      assert.equal(confidentAnswerId(question), answerId);
-      assert.deepEqual(curatedAnswer(question).sources.map(({ id }) => id), [
-        "egov-home", "egov-services", "nigeria-gov",
-      ]);
-    });
-  }
+for (const { question } of negatives) {
+  test(`curated abstains on ${question}`, () => assertAbstains(question));
+}
+
+for (const { question, context, answerId, sourceIds } of contextualCases) {
+  test(`curated handles ${question} after ${JSON.stringify(context)}`, () => {
+    if (answerId === null) {
+      assertAbstains(question, context);
+      return;
+    }
+    assertCuratedAnswer(question, context, answerId, sourceIds);
+    assert.equal(retrieve(question, 1, context)[0]?.entry.id, answerId);
+    assert.ok(buildContext(question, context).startsWith(`### ${ANSWER_MAP.get(answerId).title}\n`));
+  });
+}
+
+for (const { question, context, answerId } of centreCases) {
+  test(`curated points to the official NIMC finder for ${question}`, () => {
+    const result = curatedAnswer(question, context);
+    assert.equal(result.mode, "curated");
+    assert.equal(result.confident, true);
+    assert.match(result.answer, /Ikeja/);
+    assert.deepEqual(result.sources.map(({ id }) => id), [answerId, "nimc-enrol"]);
+    assert.ok(result.action?.url.startsWith("https://nimc.gov.ng/"));
+    assert.equal(result.agency?.url, result.action.url);
+  });
 }
 
 after((context) => {
   const correct = positives.filter(({ question, answerId }) =>
     retrieve(question)[0]?.entry.id === answerId).length;
   const falseConfidence = negatives.filter(({ question }) => curatedAnswer(question).confident).length;
-  const total = positives.length + negatives.length + 1;
+  const total = positives.length + negatives.length + contextualCases.length + centreCases.length;
   context.diagnostic(`Curated top-1: ${correct}/${positives.length}. False confidence: ${falseConfidence}/${negatives.length}. Total cases: ${total}.`);
 });
 

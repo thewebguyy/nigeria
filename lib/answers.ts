@@ -1,8 +1,29 @@
+/** Whole words and phrases that identify a service independently of the action requested. */
+export const SERVICE_IDENTIFIERS = {
+  nin: ["nin", "nimc", "national identification number", "national identity number", "national id", "identity number"],
+  passport: ["passport", "travel document"],
+  "drivers-licence": ["driver licence", "learner permit"],
+  cac: ["cac registration", "register with cac", "register company", "company registration",
+    "incorporate", "incorporation", "limited company", "register business", "business registration",
+    "business name", "trade name", "sole trader", "sole proprietorship", "register shop"],
+  tin: ["tax identification number", "tax id", "tax number", "tax registration", "register for tax",
+    "get tin", "apply for tin", "register for tin", "verify tin"],
+  jamb: ["jamb", "utme"],
+  nysc: ["nysc", "youth service", "service year", "corps member", "call up letter"],
+  nelfund: ["nelfund", "student loan", "education loan", "school fees loan"],
+  bvn: ["bvn", "nibss", "bank verification"],
+  pension: ["pension", "pencom", "retirement savings", "pfa", "gratuity"],
+  health: ["health insurance", "nhis", "nhsa", "nhia", "health cover", "health scheme", "hospital cover"],
+  emergency: ["nema", "emergency", "flood", "disaster"],
+  government: ["government services portal", "government portal", "services.gov.ng", "federal services portal"],
+} as const;
+
 export type CuratedAnswer = {
   id: string;
-  service: string;
+  service: keyof typeof SERVICE_IDENTIFIERS;
   title: string;
   keywords: string[];
+  aboutFees?: true;
   answer: string;
   sourceIds: string[];
   agency: { name: string; url: string };
@@ -101,8 +122,10 @@ export const ANSWERS: CuratedAnswer[] = [
     id: "passport-fee",
     service: "passport",
     title: "What a passport costs",
+    aboutFees: true,
     keywords: [
       "passport fee",
+      "passport renewal fee",
       "passport cost",
       "how much is a passport",
       "how much does a passport cost",
