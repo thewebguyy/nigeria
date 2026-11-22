@@ -88,6 +88,9 @@ test("invalid SQLite bytes produce no hits", (context) => {
   assert.deepEqual(runSearch(context, corrupt, [QUERY]), { hits: [[]], stats: null });
 });
 
+// Opening a directory surfaced SQLITE_CANTOPEN on Windows and SQLITE_IOERR on Ubuntu CI.
+const directoryOpenPrimaryErrors = new Map([["win32", 14], ["linux", 10]]);
 knownDefect("INDEX-02", "an index that cannot be opened degrades to no hits",
-  { hits: [[]], stats: null }, { sqliteError: 14 },
+  { hits: [[]], stats: null },
+  { failure: "sqlite-open-directory", sqliteError: directoryOpenPrimaryErrors.get(process.platform) },
   (context) => runSearch(context, mkdirSync, [QUERY]));
